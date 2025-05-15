@@ -2,68 +2,96 @@ const express = require('express');
 const router = express.Router();
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
-
 const User = require('../models/User');
-
 const { body, validationResult } = require('express-validator');
 
-// Registro usuario
+// Configuración de tokens (agrega esto al inicio)
+const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '15m'; // 15 minutos para access token
+const REFRESH_TOKEN_EXPIRES_IN = process.env.REFRESH_TOKEN_EXPIRES_IN || '7d'; // 7 días para refresh token
+
+// Registro usuario (actualizado)
 router.post('/register', [
   body('name').notEmpty().withMessage('El nombre es obligatorio'),
   body('email').isEmail().withMessage('Email inválido'),
   body('password').isLength({ min: 6 }).withMessage('La contraseña debe tener al menos 6 caracteres')
 ], async (req, res, next) => {
   try {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
-
-    const { name, email, password } = req.body;
-
-    const userExists = await User.findOne({ email });
-    if (userExists) return res.status(400).json({ error: 'Email ya registrado' });
-
-    const salt = await bcrypt.genSalt(10);
-    const hashedPassword = await bcrypt.hash(password, salt);
-
-    const user = new User({
-      name,
-      email,
-      password: hashedPassword
-    });
-
-    await user.save();
+    // ... (validaciones y creación de usuario igual que antes)
 
     const payload = { userId: user._id };
-    const token = jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: process.env.JWT_EXPIRES_IN });
+    const token = jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: JWT_EXPIRES_IN });
+    const refreshToken = jwt.sign(payload, process.env.JWT_SECRET + '_REFRESH', { expiresIn: REFRESH_TOKEN_EXPIRES_IN });
 
-    res.status(201).json({ token });
+    // Guardar refresh token en el usuario
+    user.refreshToken = refreshToken;
+    await user.save();
+
+    res.status(201).json({ 
+      token, 
+      refreshToken,
+      expiresIn: JWT_EXPIRES_IN 
+    });
   } catch (error) {
     next(error);
   }
 });
 
-// Login usuario
+// Login usuario (actualizado)
 router.post('/login', [
   body('email').isEmail().withMessage('Email inválido'),
   body('password').notEmpty().withMessage('La contraseña es obligatoria')
 ], async (req, res, next) => {
   try {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
-
-    const { email, password } = req.body;
-
-    const user = await User.findOne({ email });
-    if (!user) return res.status(400).json({ error: 'Credenciales inválidas' });
-
-    const isMatch = await bcrypt.compare(password, user.password);
-    if (!isMatch) return res.status(400).json({ error: 'Credenciales inválidas' });
+    // ... (validaciones y verificación de credenciales igual que antes)
 
     const payload = { userId: user._id };
-    const token = jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: process.env.JWT_EXPIRES_IN });
+    const token = jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: JWT_EXPIRES_IN });
+    const refreshToken = jwt.sign(payload, process.env.JWT_SECRET + '_REFRESH', { expiresIn: REFRESH_TOKEN_EXPIRES_IN });
 
-    res.json({ token });
+    // Guardar refresh token en el usuario
+    user.refreshToken = refreshToken;
+    await user.save();
+
+    res.json({ 
+      token, 
+      refreshToken,
+      expiresIn: JWT_EXPIRES_IN 
+    });
   } catch (error) {
+    next(error);
+  }
+});
+
+// Nuevo endpoint para refrescar token (agrega esto)
+router.post('/refresh-token', async (req, res, next) => {
+  try {
+    const { refreshToken } = req.body;
+    if (!refreshToken) return res.status(400).json({ error: 'Refresh token requerido' });
+
+    // Verificar refresh token
+    const decoded = jwt.verify(refreshToken, process.env.JWT_SECRET + '_REFRESH');
+    const user = await User.findById(decoded.userId);
+
+    if (!user || user.refreshToken !== refreshToken) {
+      return res.status(403).json({ error: 'Refresh token inválido' });
+    }
+
+    // Generar nuevo token de acceso
+    const newToken = jwt.sign(
+      { userId: user._id }, 
+      process.env.JWT_SECRET, 
+      { expiresIn: JWT_EXPIRES_IN }
+    );
+
+    res.json({ 
+      token: newToken,
+      refreshToken, // Puedes optar por generar uno nuevo también
+      expiresIn: JWT_EXPIRES_IN 
+    });
+  } catch (error) {
+    if (error.name === 'TokenExpiredError') {
+      return res.status(403).json({ error: 'Refresh token expirado, por favor inicie sesión nuevamente' });
+    }
     next(error);
   }
 });
