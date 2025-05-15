@@ -41,24 +41,46 @@ router.post('/login', [
   body('email').isEmail().withMessage('Email inválido'),
   body('password').notEmpty().withMessage('La contraseña es obligatoria')
 ], async (req, res, next) => {
+  // 1. Validar campos con express-validator
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({ errors: errors.array() });
+  }
+
+  const { email, password } = req.body;
+
   try {
-    // ... (validaciones y verificación de credenciales igual que antes)
+    // 2. Buscar usuario (¡con manejo explícito de null!)
+    const user = await User.findOne({ email });
+    if (!user) {
+      return res.status(401).json({ error: 'Credenciales inválidas' }); // Mensaje genérico por seguridad
+    }
 
+    // 3. Verificar contraseña
+    const isMatch = await bcrypt.compare(password, user.password);
+    if (!isMatch) {
+      return res.status(401).json({ error: 'Credenciales inválidas' });
+    }
+
+    // 4. Generar tokens
     const payload = { userId: user._id };
-    const token = jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: JWT_EXPIRES_IN });
-    const refreshToken = jwt.sign(payload, process.env.JWT_SECRET + '_REFRESH', { expiresIn: REFRESH_TOKEN_EXPIRES_IN });
+    const token = jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: '15m' });
+    const refreshToken = jwt.sign(payload, process.env.JWT_REFRESH_SECRET, { expiresIn: '7d' });
 
-    // Guardar refresh token en el usuario
+    // 5. Actualizar refresh token en la DB
     user.refreshToken = refreshToken;
     await user.save();
 
+    // 6. Responder
     res.json({ 
       token, 
       refreshToken,
-      expiresIn: JWT_EXPIRES_IN 
+      user: { id: user._id, email: user.email } // Datos seguros del usuario
     });
+
   } catch (error) {
-    next(error);
+    console.error('Error en login:', error);
+    next(error); // Pasa al middleware de errores
   }
 });
 

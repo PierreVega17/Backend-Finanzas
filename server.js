@@ -1,6 +1,6 @@
 require('dotenv').config();
 require('express-async-errors');
-
+//prueba
 const express = require('express');
 const mongoose = require('mongoose');
 const morgan = require('morgan');
