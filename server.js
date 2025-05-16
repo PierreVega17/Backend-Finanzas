@@ -1,6 +1,5 @@
 require('dotenv').config();
 require('express-async-errors');
-//prueba
 const express = require('express');
 const mongoose = require('mongoose');
 const morgan = require('morgan');
@@ -20,32 +19,49 @@ const app = express();
 
 // Configuración mejorada de CORS
 const allowedOrigins = [
-  process.env.FRONTEND_URL, 
+  process.env.FRONTEND_URL,
   'http://localhost:5173',
-  'https://tu-frontend-en-render.onrender.com' // Agrega aquí tu URL de producción
-].filter(Boolean); // Filtra valores undefined
+  'https://frontend-finanzas-git-fix-jean-pierre-galarreta-vegas-projects.vercel.app',
+  'https://frontend-finanzas.vercel.app',
+  'https://tu-frontend-en-render.onrender.com'
+].filter(Boolean);
 
 const corsOptions = {
   origin: function (origin, callback) {
     // Permitir solicitudes sin origen (como apps móviles o curl)
     if (!origin) return callback(null, true);
     
-    if (allowedOrigins.indexOf(origin) !== -1) {
+    // Verificar contra la lista de dominios permitidos
+    const isAllowed = allowedOrigins.some(allowedOrigin => 
+      origin === allowedOrigin || 
+      origin.endsWith('.vercel.app') // Permite todos los subdominios de Vercel
+    );
+    
+    if (isAllowed) {
       callback(null, true);
     } else {
+      console.warn('Intento de acceso desde origen no permitido:', origin);
       callback(new Error('Not allowed by CORS'));
     }
   },
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'x-auth-token'],
   credentials: true,
-  optionsSuccessStatus: 200 // Para navegadores antiguos
+  optionsSuccessStatus: 200
 };
 
 // Middlewares
 app.use(cors(corsOptions));
+app.options('*', cors(corsOptions)); // Habilitar preflight para todas las rutas
 app.use(express.json());
 app.use(morgan('dev'));
+
+// Headers adicionales para Vercel
+app.use((req, res, next) => {
+  res.header('Access-Control-Allow-Credentials', 'true');
+  res.header('Access-Control-Expose-Headers', 'x-auth-token');
+  next();
+});
 
 // ==================== RUTAS ====================
 
@@ -104,13 +120,15 @@ app.use((err, req, res, next) => {
   if (err.message === 'Not allowed by CORS') {
     return res.status(403).json({ 
       error: 'Acceso prohibido por CORS',
-      allowedOrigins: allowedOrigins
+      allowedOrigins: allowedOrigins,
+      attemptedOrigin: req.headers.origin
     });
   }
 
   res.status(500).json({ 
     error: 'Error interno del servidor',
-    message: process.env.NODE_ENV === 'development' ? err.message : 'Ocurrió un error inesperado'
+    message: process.env.NODE_ENV === 'development' ? err.message : 'Ocurrió un error inesperado',
+    ...(process.env.NODE_ENV === 'development' && { stack: err.stack })
   });
 });
 
@@ -122,17 +140,16 @@ const connectDB = async () => {
   try {
     console.log('Intentando conectar a MongoDB...');
     await mongoose.connect(MONGODB_URI, {
-      serverSelectionTimeoutMS: 5000, // Timeout después de 5 segundos
-      socketTimeoutMS: 45000, // Cierra sockets después de 45s de inactividad
+      serverSelectionTimeoutMS: 5000,
+      socketTimeoutMS: 45000,
     });
     console.log('✅ Conectado a MongoDB');
   } catch (err) {
     console.error('❌ Error al conectar a MongoDB:', err);
-    process.exit(1); // Termina el proceso con error
+    process.exit(1);
   }
 };
 
-// Función para iniciar el servidor
 const startServer = async () => {
   await connectDB();
   
@@ -142,7 +159,6 @@ const startServer = async () => {
     console.log(`🌍 Entorno: ${process.env.NODE_ENV || 'development'}`);
   });
 
-  // Manejo de errores del servidor
   server.on('error', (error) => {
     if (error.code === 'EADDRINUSE') {
       console.error(`⚠️  El puerto ${PORT} está en uso`);
@@ -153,7 +169,6 @@ const startServer = async () => {
   });
 };
 
-// Función para cerrar el servidor y la conexión a la base de datos
 const closeServer = async () => {
   if (server) {
     await new Promise((resolve) => server.close(resolve));
@@ -165,7 +180,6 @@ const closeServer = async () => {
   }
 };
 
-// Manejo de señales de terminación
 process.on('SIGTERM', () => {
   console.log('🔻 Recibida señal SIGTERM');
   closeServer().then(() => process.exit(0));
@@ -176,7 +190,6 @@ process.on('SIGINT', () => {
   closeServer().then(() => process.exit(0));
 });
 
-// Iniciar el servidor si no estamos en modo test
 if (process.env.NODE_ENV !== 'test') {
   startServer();
 }
